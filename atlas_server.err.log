@@ -1,0 +1,57 @@
+ * Tip: There are .env files present. Install python-dotenv to use them.
+WARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.
+ * Running on http://127.0.0.1:5000
+Press CTRL+C to quit
+ * Restarting with stat
+ * Tip: There are .env files present. Install python-dotenv to use them.
+ * Debugger is active!
+ * Debugger PIN: 277-166-996
+ * Detected change in 'C:\\Users\\dge457\\Development\\python_projects\\MuliFileProject\\app.py', reloading
+ * Restarting with stat
+ * Tip: There are .env files present. Install python-dotenv to use them.
+ * Debugger is active!
+ * Debugger PIN: 277-166-996
+ * Detected change in 'C:\\Users\\dge457\\Development\\python_projects\\MuliFileProject\\app.py', reloading
+ * Restarting with stat
+ * Tip: There are .env files present. Install python-dotenv to use them.
+ * Debugger is active!
+ * Debugger PIN: 277-166-996
+ * Detected change in 'C:\\Users\\dge457\\Development\\python_projects\\MuliFileProject\\app.py', reloading
+ * Restarting with stat
+ * Tip: There are .env files present. Install python-dotenv to use them.
+ * Debugger is active!
+ * Debugger PIN: 277-166-996
+ * Detected change in 'C:\\Users\\dge457\\Development\\python_projects\\MuliFileProject\\app.py', reloading
+ * Restarting with stat
+ * Tip: There are .env files present. Install python-dotenv to use them.
+ * Debugger is active!
+ * Debugger PIN: 277-166-996
+ * Detected change in 'C:\\Users\\dge457\\Development\\python_projects\\MuliFileProject\\app.py', reloading
+ * Restarting with stat
+ * Tip: There are .env files present. Install python-dotenv to use them.
+ * Debugger is active!
+ * Debugger PIN: 277-166-996
+ * Detected change in 'C:\\Users\\dge457\\Development\\python_projects\\MuliFileProject\\app.py', reloading
+ * Restarting with stat
+ * Tip: There are .env files present. Install python-dotenv to use them.
+ * Debugger is active!
+ * Debugger PIN: 277-166-996
+ * Detected change in 'C:\\Users\\dge457\\Development\\python_projects\\MuliFileProject\\app.py', reloading
+ * Restarting with stat
+ * Tip: There are .env files present. Install python-dotenv to use them.
+ * Debugger is active!
+ * Debugger PIN: 277-166-996
+127.0.0.1 - - [01/May/2026 12:43:14] "GET /api/live-data?q=Protest&country=United+Kingdom&region=All&language=All&platform=Telegram&platform=Instagram&platform=X&platform=Websites HTTP/1.1" 200 -
+127.0.0.1 - - [01/May/2026 12:43:44] "GET /api/live-data?q=Protest&country=United+Kingdom&region=All&language=All&platform=Telegram&platform=Instagram&platform=X&platform=Websites HTTP/1.1" 200 -
+127.0.0.1 - - [01/May/2026 12:44:29] "GET /api/live-data?q=Protest&country=United+Kingdom&region=All&language=All&platform=Telegram&platform=Instagram&platform=X&platform=Websites HTTP/1.1" 200 -
+127.0.0.1 - - [01/May/2026 12:45:29] "GET /api/live-data?q=Protest&country=United+Kingdom&region=All&language=All&platform=Telegram&platform=Instagram&platform=X&platform=Websites HTTP/1.1" 200 -
+127.0.0.1 - - [01/May/2026 12:46:29] "GET /api/live-data?q=Protest&country=United+Kingdom&region=All&language=All&platform=Telegram&platform=Instagram&platform=X&platform=Websites HTTP/1.1" 200 -
+127.0.0.1 - - [01/May/2026 12:47:29] "GET /api/live-data?q=Protest&country=United+Kingdom&region=All&language=All&platform=Telegram&platform=Instagram&platform=X&platform=Websites HTTP/1.1" 200 -
+127.0.0.1 - - [01/May/2026 12:48:29] "GET /api/live-data?q=Protest&country=United+Kingdom&region=All&language=All&platform=Telegram&platform=Instagram&platform=X&platform=Websites HTTP/1.1" 200 -
+127.0.0.1 - - [01/May/2026 12:49:29] "GET /api/live-data?q=Protest&country=United+Kingdom&region=All&language=All&platform=Telegram&platform=Instagram&platform=X&platform=Websites HTTP/1.1" 200 -
+ * Detected change in 'C:\\Users\\dge457\\Development\\python_projects\\MuliFileProject\\app.py', reloading
+ * Restarting with stat
+  File "C:\Users\dge457\Development\python_projects\MuliFileProject\app.py", line 1391
+    selected_platforms = platforms or USER_SELECTABLE_PLATFORMS
+    ^^^^^^^^^^^^^^^^^^
+IndentationError: expected an indented block after function definition on line 1390

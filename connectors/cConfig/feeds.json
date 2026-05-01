@@ -1,0 +1,26 @@
+[
+  {
+    "name": "BBC World",
+    "url": "http://feeds.bbci.co.uk/news/world/rss.xml",
+    "country": "All",
+    "region": "All",
+    "language": "English",
+    "geoPrecision": "region",
+    "geoMethod": "feed metadata",
+    "confidenceScore": 0.85,
+    "severityScore": 0.7,
+    "verificationState": "Publisher"
+  },
+  {
+    "name": "ReliefWeb",
+    "url": "https://reliefweb.int/updates?format=atom",
+    "country": "All",
+    "region": "All",
+    "language": "English",
+    "geoPrecision": "region",
+    "geoMethod": "feed metadata",
+    "confidenceScore": 0.82,
+    "severityScore": 0.7,
+    "verificationState": "Publisher"
+  }
+]
