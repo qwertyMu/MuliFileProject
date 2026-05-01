@@ -1,4 +1,7 @@
 .env
+.dev
 __pycache__/
 *.pyc
 signal_atlas.db
+*.session
+*.session-journal

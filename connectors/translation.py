@@ -4,6 +4,8 @@ from config import Config
 def translate_text(text, source="auto", target="en"):
     if not text:
         return text
+    if Config.TRANSLATION_PROVIDER in ("", "disabled", "none"):
+        return text
 
     try:
         response = requests.post(

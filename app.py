@@ -1,35 +1,20 @@
 import os
-import requests
-from dotenv import load_dotenv
-
-load_dotenv(".dev")
+import json
+from pathlib import Path
+from urllib.parse import quote_plus
 from flask import Flask, jsonify, request, render_template_string, Response
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from concurrent.futures import ThreadPoolExecutor
-from config import connector_status
+from config import Config, connector_status
+from connectors.rss_connector import parse_feed
+from connectors.t import search_telegram
 from storage import init_db, insert_alert, get_alerts, get_recent_items
 from ingestion import start_background_poller
 import csv
 import io
 import random
 import uuid
-
-TELEGRAM_BOT_TOKEN = os.getenv("8632040512:AAGrvn2m45_o9mZv-NHFaLlogAgYuNvEn84", "").strip()
-TELEGRAM_API_ID = os.getenv("20038314", "").strip()
-TELEGRAM_API_HASH = os.getenv("df335901b10654b0cc678b588e607926", "").strip()
-TELEGRAM_PHONE = os.getenv("+447938830119", "").strip()
-
-X_BEARER_TOKEN = os.getenv("AAAAAAAAAAAAAAAAAAAAAEhw9QEAAAAAcUTlLHk4OwtHVVNsdfsoNqgbKRo%3DOwoQO4LGrhjwAX20PNXaZjhIMtRz9ELLVCrAJc3p4vi4svvpXg", "").strip()
-X_CLIENT_ID = os.getenv("TktmZEpzbzFpMmx3NGYzQW5lUnc6MTpjaQ", "").strip()
-X_CLIENT_SECRET = os.getenv("UjQWmoYmT-zWrRPHEpKOql1udgYYIqpGpU5LJP0cs3537fJXFEi6wpg2CcDVSdqNCLojIhKt9", "").strip()
-
-INSTAGRAM_ACCESS_TOKEN = os.getenv("INSTAGRAM_ACCESS_TOKEN", "").strip()
-INSTAGRAM_APP_ID = os.getenv("INSTAGRAM_APP_ID", "").strip()
-INSTAGRAM_APP_SECRET = os.getenv("INSTAGRAM_APP_SECRET", "").strip()
-
-TRANSLATION_API_KEY = os.getenv("TRANSLATION_API_KEY", "").strip()
-TRANSLATION_PROVIDER = os.getenv("TRANSLATION_PROVIDER", "libretranslate").strip()
-TRANSLATION_URL = os.getenv("https://libretranslate.de/translate", "").strip()
 
 app = Flask(__name__)
 
@@ -327,6 +312,129 @@ def ago(dt):
     return f"{seconds // 3600}h ago"
 
 
+def parse_dt(value):
+    if isinstance(value, datetime):
+        dt = value
+    elif isinstance(value, str) and value.strip():
+        try:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            try:
+                dt = parsedate_to_datetime(value)
+            except (TypeError, ValueError):
+                dt = now_utc()
+    else:
+        dt = now_utc()
+
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def source_domain(source_url):
+    if source_url and "://" in source_url:
+        return source_url.split("/")[2]
+    return ""
+
+
+def normalize_item(item):
+    normalized = dict(item)
+    posted = parse_dt(normalized.get("postedAt"))
+    first_seen = parse_dt(normalized.get("firstSeenAt"))
+    source_url = normalized.get("sourceUrl", "")
+    country = normalized.get("country") or "All"
+    region = normalized.get("region") or "All"
+    author_name = normalized.get("authorName") or "Unknown source"
+    keywords = normalized.get("keywords") or []
+
+    normalized.update({
+        "id": normalized.get("id") or str(uuid.uuid4()),
+        "alertId": normalized.get("alertId") or get_or_create_default_alert()["id"],
+        "sourcePlatform": normalized.get("sourcePlatform") or "Unknown",
+        "sourceType": normalized.get("sourceType") or "web",
+        "sourceUrl": source_url,
+        "sourceDomain": normalized.get("sourceDomain") or source_domain(source_url),
+        "authorName": author_name,
+        "authorHandle": normalized.get("authorHandle") or author_name.lower().replace(" ", "-"),
+        "authorUrl": normalized.get("authorUrl") or "",
+        "postedAt": iso(posted),
+        "firstSeenAt": iso(first_seen),
+        "postedAgo": ago(posted),
+        "text": normalized.get("text") or normalized.get("summary") or "",
+        "translatedText": normalized.get("translatedText") or normalized.get("text") or "",
+        "language": normalized.get("language") or "Unknown",
+        "keywords": keywords,
+        "hashtags": normalized.get("hashtags") or [f"#{kw.replace(' ', '')}" for kw in keywords[:2]],
+        "country": country,
+        "region": region,
+        "city": normalized.get("city") or (region if region != "All" else ""),
+        "geoPrecision": normalized.get("geoPrecision") or "unknown",
+        "geoMethod": normalized.get("geoMethod") or "unavailable",
+        "confidenceScore": normalized.get("confidenceScore", 0.75),
+        "severity": normalized.get("severity") or "Medium",
+        "severityScore": normalized.get("severityScore", normalized.get("confidenceScore", 0.75)),
+        "duplicateClusterId": normalized.get("duplicateClusterId"),
+        "verificationState": normalized.get("verificationState") or "Open source",
+        "engagement": normalized.get("engagement", 0),
+        "engagementLabel": normalized.get("engagementLabel") or "",
+        "locationLabel": normalized.get("locationLabel") or (
+            f"{region}, {country}" if region != "All" and country != "All" else country
+        ),
+        "summary": normalized.get("summary") or (normalized.get("text") or "Matched item")[:120],
+        "mediaThumbnail": normalized.get("mediaThumbnail") or "",
+    })
+    return normalized
+
+
+def normalize_db_item(row):
+    return normalize_item({
+        "id": row.get("id"),
+        "alertId": row.get("alert_id"),
+        "sourcePlatform": row.get("source_platform"),
+        "sourceType": row.get("source_type"),
+        "sourceUrl": row.get("source_url"),
+        "sourceDomain": row.get("source_domain"),
+        "authorName": row.get("author_name"),
+        "authorHandle": row.get("author_handle"),
+        "authorUrl": row.get("author_url"),
+        "postedAt": row.get("posted_at"),
+        "firstSeenAt": row.get("first_seen_at"),
+        "text": row.get("text"),
+        "translatedText": row.get("translated_text"),
+        "language": row.get("language"),
+        "keywords": [x.strip() for x in (row.get("matched_keywords") or "").split(",") if x.strip()],
+        "hashtags": [x.strip() for x in (row.get("hashtags") or "").split(",") if x.strip()],
+        "country": row.get("country"),
+        "region": row.get("region"),
+        "city": row.get("city"),
+        "lat": row.get("lat"),
+        "lng": row.get("lng"),
+        "geoPrecision": row.get("geo_precision"),
+        "geoMethod": row.get("geo_method"),
+        "confidenceScore": row.get("confidence_score"),
+        "severity": row.get("severity"),
+        "severityScore": row.get("severity_score"),
+        "duplicateClusterId": row.get("duplicate_cluster_id"),
+        "verificationState": row.get("verification_state"),
+        "engagement": row.get("engagement", 0),
+        "summary": row.get("summary"),
+    })
+
+
+def load_feed_configs(diagnostics=None):
+    feeds_path = Path(Config.FEEDS_PATH)
+    try:
+        if not feeds_path.exists():
+            if diagnostics is not None:
+                diagnostics["Websites"] = {"status": "error", "message": f"Feed config not found: {feeds_path}"}
+            return []
+        return json.loads(feeds_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        if diagnostics is not None:
+            diagnostics["Websites"] = {"status": "error", "message": str(exc)}
+        return []
+
+
 def next_alert_id():
     return f"alert-{uuid.uuid4().hex[:8]}"
 
@@ -494,9 +602,9 @@ def apply_filters(items, country="All", region="All", language="All", severity="
     filtered = list(items)
 
     if country != "All":
-        filtered = [i for i in filtered if i.get("country") == country]
+        filtered = [i for i in filtered if i.get("country") in (country, "All")]
     if region != "All":
-        filtered = [i for i in filtered if i.get("region") == region]
+        filtered = [i for i in filtered if i.get("region") in (region, "All")]
     if language != "All":
         filtered = [i for i in filtered if i.get("language") == language]
     if severity != "All":
@@ -636,6 +744,7 @@ HTML = """
           <div class="platform-checks" id="platformChecks"></div>
           <div class="front-results">
             <div class="section-header"><div class="section-title">Immediate results</div><div class="muted" id="frontQueryStatus">No live request yet.</div></div>
+            <div id="connectorDiagnostics" class="table-like" style="margin-top:12px;"></div>
             <div id="frontResults" class="feed-column"></div>
           </div>
         </div>
@@ -761,7 +870,7 @@ HTML = """
   <aside class="detail-drawer" id="detailDrawer"><div class="row"><div class="section-title">Incident detail</div><button class="ghost-btn" id="closeDrawer">Close</button></div><div id="detailContent"></div></aside>
 
   <script>
-    const appState = { data: null, filtered: [], selectedId: null, enabledPlatforms: ['Telegram', 'Instagram', 'X', 'Websites'], preferences: null, currentQuery: 'protest', currentCountry: 'All', currentRegion: 'All', currentLanguage: 'All' };
+    const appState = { data: null, filtered: [], selectedId: null, enabledPlatforms: ['Telegram', 'Instagram', 'X', 'Websites'], preferences: null, diagnostics: {}, currentQuery: 'protest', currentCountry: 'All', currentRegion: 'All', currentLanguage: 'All' };
     const pages = document.querySelectorAll('.page');
     const tabButtons = document.querySelectorAll('.tab-btn');
 
@@ -892,7 +1001,7 @@ HTML = """
       if (appState.enabledPlatforms && appState.enabledPlatforms.length) {
         filtered = filtered.filter(i => !i.sourcePlatform || appState.enabledPlatforms.includes(i.sourcePlatform));
       }
-      if (country !== 'All') filtered = filtered.filter(i => i.country === country);
+      if (country !== 'All') filtered = filtered.filter(i => i.country === country || i.country === 'All');
       if (platform !== 'All') filtered = filtered.filter(i => i.sourcePlatform === platform);
       if (language !== 'All') filtered = filtered.filter(i => i.language === language);
       if (severity !== 'All') filtered = filtered.filter(i => i.severity === severity);
@@ -1078,6 +1187,7 @@ HTML = """
   document.getElementById('landingKeywords').value = appState.currentQuery;
   document.getElementById('frontQueryStatus').textContent =
     `Live request: ${appState.currentQuery} · ${items.length} results`;
+  renderConnectorDiagnostics(appState.diagnostics);
 
   document.getElementById('landingCountry').value = appState.currentCountry;
   updateRegionOptions();
@@ -1111,6 +1221,7 @@ HTML = """
   const payload = await res.json();
 
   const liveItems = Array.isArray(payload.items) ? payload.items : [];
+  appState.diagnostics = payload.diagnostics || {};
 
   appState.data.items = liveItems;
   appState.filtered = liveItems;
@@ -1134,6 +1245,7 @@ HTML = """
   document.getElementById('alertKeywords').value = appState.currentQuery;
 
   renderImmediateResults(liveItems);
+  renderConnectorDiagnostics(appState.diagnostics);
   updateKPIs(liveItems);
 
   renderOverview(liveItems);
@@ -1153,6 +1265,17 @@ function renderImmediateResults(items){
   attachCardHandlers();
 }
 
+function renderConnectorDiagnostics(diagnostics){
+  const root = document.getElementById('connectorDiagnostics');
+  const entries = Object.entries(diagnostics || {});
+  root.innerHTML = entries.length
+    ? entries.map(([name, detail]) => `<div class="list-row">
+        <div><strong>${name}</strong><div class="muted">${detail.message || ''}</div></div>
+        <span class="platform-badge">${detail.status || 'info'}</span>
+      </div>`).join('')
+    : '';
+}
+
    async function refreshData(){
   const params = new URLSearchParams();
   params.set('q', appState.currentQuery || 'protest');
@@ -1165,6 +1288,7 @@ function renderImmediateResults(items){
   const payload = await res.json();
 
   const liveItems = Array.isArray(payload.items) ? payload.items : [];
+  appState.diagnostics = payload.diagnostics || {};
   appState.data.items = liveItems;
   appState.filtered = liveItems;
 
@@ -1172,6 +1296,7 @@ function renderImmediateResults(items){
     `Live request: ${appState.currentQuery} · ${liveItems.length} results`;
 
   renderLanding({ ...appState.data, items: liveItems });
+  renderConnectorDiagnostics(appState.diagnostics);
   updateKPIs(liveItems);
   renderOverview(liveItems);
   renderMap(liveItems);
@@ -1317,92 +1442,81 @@ def build_result_item(
         "mediaThumbnail": "",
     }
 
-def search_telegram_public(query, country, region, alert_id):
-    if not TELEGRAM_BOT_TOKEN:
-        print("Telegram token missing")
-        return []
+def make_alert(query, country, region, language, platforms, alert_id):
+    return {
+        "id": alert_id,
+        "name": f"Live: {query or 'monitoring request'}",
+        "country": country,
+        "region": region,
+        "keywords": [k.strip() for k in query.split(",") if k.strip()],
+        "exclude_keywords": [],
+        "languages": [language or "All"],
+        "sources": platforms,
+        "window": "24h",
+        "refresh": "30s",
+        "createdAt": now_utc().isoformat(),
+    }
 
-    keywords = [k.strip() for k in query.split(",") if k.strip()]
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
 
-    try:
-        response = requests.get(url, timeout=15)
-        response.raise_for_status()
-        payload = response.json()
-        print("Telegram raw updates:", len(payload.get("result", [])))
-    except Exception as exc:
-        print("Telegram fetch error:", exc)
-        return []
-
-    items = []
-    for update in payload.get("result", []):
-        message = update.get("message") or update.get("channel_post") or {}
-        text = (message.get("text") or message.get("caption") or "").strip()
-        if not text:
-            continue
-
-        matched = matches_keywords(text, keywords)
-        if not matched:
-            continue
-
-        chat = message.get("chat", {})
-        author_name = chat.get("title") or chat.get("username") or "Telegram source"
-        author_handle = f"@{chat.get('username')}" if chat.get("username") else ""
-        posted_dt = datetime.fromtimestamp(message.get("date", int(now_utc().timestamp())), tz=timezone.utc)
-
-        items.append({
-            "id": str(uuid.uuid4()),
-            "alertId": alert_id,
-            "sourcePlatform": "Telegram",
-            "sourceType": "social",
-            "sourceUrl": "",
-            "sourceDomain": "telegram",
-            "authorName": author_name,
-            "authorHandle": author_handle,
-            "authorUrl": "",
-            "postedAt": iso(posted_dt),
-            "firstSeenAt": iso(now_utc()),
-            "postedAgo": ago(posted_dt),
-            "text": text,
-            "translatedText": text,
-            "language": "Unknown",
-            "keywords": matched,
-            "hashtags": [f"#{k.replace(' ', '')}" for k in matched[:2]],
-            "country": country,
-            "region": region,
-            "city": region if region != "All" else "",
-            "lat": None,
-            "lng": None,
-            "geoPrecision": "unknown",
-            "geoMethod": "unavailable",
-            "confidenceScore": 0.8,
-            "severity": "Medium",
-            "severityScore": 0.8,
-            "duplicateClusterId": None,
-            "verificationState": "Open source",
-            "engagement": 0,
-            "engagementLabel": "",
-            "locationLabel": f"{region}, {country}" if region != "All" and country != "All" else country,
-            "summary": text[:120],
-            "mediaThumbnail": "",
+def search_web_sources(alert, diagnostics=None):
+    feeds = load_feed_configs(diagnostics)
+    keywords = alert.get("keywords", [])
+    if keywords:
+        query = " OR ".join(keywords)
+        feeds.append({
+            "name": "Google News",
+            "url": f"https://news.google.com/rss/search?q={quote_plus(query)}&hl=en-GB&gl=GB&ceid=GB:en",
+            "country": "All",
+            "region": "All",
+            "language": "English",
+            "geoPrecision": "region",
+            "geoMethod": "news search RSS",
+            "confidenceScore": 0.72,
+            "severityScore": 0.65,
+            "verificationState": "Publisher",
         })
+    items = []
+    errors = []
 
-    print("Telegram matched items:", len(items))
+    for feed in feeds:
+        try:
+            items.extend(parse_feed(feed, alert))
+        except Exception as exc:
+            errors.append(f"{feed.get('name', feed.get('url', 'feed'))}: {exc}")
+
+    if diagnostics is not None:
+        if errors:
+            diagnostics["Websites"] = {
+                "status": "partial",
+                "message": f"Matched {len(items)} item(s). Feed errors: {'; '.join(errors[:3])}",
+            }
+        else:
+            diagnostics["Websites"] = {
+                "status": "ok",
+                "message": f"Checked {len(feeds)} feed(s), matched {len(items)} item(s).",
+            }
+
     return items
 
-def search_x_public(query, country, region, alert_id):
-    print("X connector not implemented yet")
+
+def search_x_public(diagnostics=None):
+    if diagnostics is not None:
+        diagnostics["X"] = {"status": "unavailable", "message": "X search is not implemented in this pass."}
     return []
 
-def search_instagram_public(query, country, region, alert_id):
-    print("Instagram connector not implemented yet")
-    return []
+
+def search_instagram_public(diagnostics=None):
+    if diagnostics is not None:
+        diagnostics["Instagram"] = {"status": "unavailable", "message": "Instagram search is not implemented in this pass."}
     return []
 
-def search_public_sources(query, country="All", region="All", platforms=None, alert_id=None):
+
+def search_public_sources(query, country="All", region="All", language="All", platforms=None, alert_id=None, include_diagnostics=False):
     selected_platforms = platforms or USER_SELECTABLE_PLATFORMS
     current_alert_id = alert_id or get_or_create_default_alert()["id"]
+    alert = make_alert(query, country, region, language, selected_platforms, current_alert_id)
     items = []
+    diagnostics = {}
 
     print("SEARCH")
     print("query:", query)
@@ -1411,27 +1525,31 @@ def search_public_sources(query, country="All", region="All", platforms=None, al
     print("platforms:", selected_platforms)
 
     if "Telegram" in selected_platforms:
-        telegram_items = search_telegram_public(query, country, region, current_alert_id)
+        telegram_items = search_telegram(alert, diagnostics)
         print("Telegram:", len(telegram_items))
         items.extend(telegram_items)
 
     if "X" in selected_platforms:
-        x_items = search_x_public(query, country, region, current_alert_id)
+        x_items = search_x_public(diagnostics)
         print("X:", len(x_items))
         items.extend(x_items)
 
     if "Instagram" in selected_platforms:
-        instagram_items = search_instagram_public(query, country, region, current_alert_id)
+        instagram_items = search_instagram_public(diagnostics)
         print("Instagram:", len(instagram_items))
         items.extend(instagram_items)
 
-    # if "Websites" in selected_platforms:
-    #     web_items = search_web_sources(query, country, region, current_alert_id)
-    #     print("Websites:", len(web_items))
-    #     items.extend(web_items)
+    if "Websites" in selected_platforms:
+        web_items = search_web_sources(alert, diagnostics)
+        print("Websites:", len(web_items))
+        items.extend(web_items)
 
-    print("Total:", len(items))
-    return sorted(items, key=lambda x: x["postedAt"], reverse=True)
+    normalized = [normalize_item(item) for item in items]
+    print("Total:", len(normalized))
+    sorted_items = sorted(normalized, key=lambda x: x["postedAt"], reverse=True)
+    if include_diagnostics:
+        return sorted_items, diagnostics
+    return sorted_items
 
 
 
@@ -1442,13 +1560,15 @@ def dashboard_payload():
     if DEFAULT_ALERT is None:
         DEFAULT_ALERT = get_or_create_default_alert()
 
+    recent_items = LIVE_ITEMS or [normalize_db_item(row) for row in get_recent_items()]
+
     return {
         "countries": ["All", *list(COUNTRIES.keys())],
         "countryRegions": {country: meta["regions"] for country, meta in COUNTRIES.items()},
         "languages": ["All", *LANGUAGES],
         "templates": TEMPLATES,
         "alerts": get_alerts(),
-        "items": [],
+        "items": recent_items,
         "userSelectablePlatforms": USER_SELECTABLE_PLATFORMS,
         "mapBounds": MAP_BOUNDS,
         "preferences": WORKSPACE_PREFERENCES,
@@ -1498,12 +1618,14 @@ def api_live_data():
     print("region:", region)
     print("requested_platforms:", requested_platforms)
 
-    items = search_public_sources(
+    items, diagnostics = search_public_sources(
         query=q,
         country=country,
         region=region,
+        language=language,
         platforms=requested_platforms,
         alert_id=live_alert["id"],
+        include_diagnostics=True,
     )
 
     items = apply_filters(
@@ -1522,7 +1644,8 @@ def api_live_data():
 
     return jsonify({
         "items": items,
-        "alert": live_alert
+        "alert": live_alert,
+        "diagnostics": diagnostics,
     })
 
 @app.route("/api/alerts", methods=["GET", "POST"])
@@ -1566,7 +1689,14 @@ def export_csv_file():
     source_platform = request.args.get("sourcePlatform", "All")
     q = request.args.get("q", DEFAULT_QUERY["query"]).strip()
 
-    items = collect_live_items(q, requested_platforms, country, region, language, get_or_create_default_alert()["id"])
+    items = search_public_sources(
+        query=q,
+        country=country,
+        region=region,
+        language=language,
+        platforms=requested_platforms,
+        alert_id=get_or_create_default_alert()["id"],
+    )
     items = apply_filters(items, country=country, region=region, language=language, severity=severity, geo=geo, platform=source_platform, query=q)
 
     output = io.StringIO()
@@ -1598,13 +1728,13 @@ def export_csv_file():
 if __name__ == "__main__":
     init_db()
     DEFAULT_ALERT = get_or_create_default_alert()
-    LIVE_ITEMS = collect_live_items(
-        DEFAULT_QUERY["query"],
-        DEFAULT_QUERY["platforms"],
-        DEFAULT_QUERY["country"],
-        DEFAULT_QUERY["region"],
-        DEFAULT_QUERY["language"],
-        DEFAULT_ALERT["id"],
+    LIVE_ITEMS = search_public_sources(
+        query=DEFAULT_QUERY["query"],
+        country=DEFAULT_QUERY["country"],
+        region=DEFAULT_QUERY["region"],
+        language=DEFAULT_QUERY["language"],
+        platforms=DEFAULT_QUERY["platforms"],
+        alert_id=DEFAULT_ALERT["id"],
     )
     start_background_poller(interval_seconds=30)
     app.run(debug=True, host="127.0.0.1", port=5000)

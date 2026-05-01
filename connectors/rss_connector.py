@@ -1,7 +1,9 @@
 import uuid
+import calendar
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 import feedparser
+import requests
 
 from connectors.translation import translate_text
 
@@ -19,6 +21,12 @@ KEYWORD_SEVERITY_HINTS = {
 def now_iso():
     return datetime.now(timezone.utc).isoformat()
 
+def entry_datetime(entry):
+    parsed_time = entry.get("published_parsed") or entry.get("updated_parsed")
+    if parsed_time:
+        return datetime.fromtimestamp(calendar.timegm(parsed_time), tz=timezone.utc).isoformat()
+    return now_iso()
+
 def detect_severity(matched_keywords):
     for keyword in matched_keywords:
         if keyword.lower() in KEYWORD_SEVERITY_HINTS:
@@ -29,8 +37,17 @@ def find_matches(text, keywords):
     lowered = text.lower()
     return [kw for kw in keywords if kw.lower() in lowered]
 
+def fetch_feed(url):
+    response = requests.get(
+        url,
+        headers={"User-Agent": "Mozilla/5.0 (compatible; ATLAS/1.0; +https://localhost)"},
+        timeout=15,
+    )
+    response.raise_for_status()
+    return feedparser.parse(response.content)
+
 def parse_feed(feed_config, alert):
-    parsed = feedparser.parse(feed_config["url"])
+    parsed = fetch_feed(feed_config["url"])
     items = []
 
     keywords = alert.get("keywords", [])
@@ -72,7 +89,7 @@ def parse_feed(feed_config, alert):
             "authorName": feed_config.get("name", domain),
             "authorHandle": feed_config.get("name", domain).lower().replace(" ", "-"),
             "authorUrl": feed_config["url"],
-            "postedAt": entry.get("published", now_iso()),
+            "postedAt": entry_datetime(entry),
             "firstSeenAt": now_iso(),
             "text": summary,
             "translatedText": translated_summary,

@@ -3,13 +3,14 @@ import threading
 import time
 from pathlib import Path
 
+from config import Config
 from connectors.rss_connector import parse_feed
 from connectors.t import search_telegram
 from connectors.x import search_x
 from connectors.INSTA import search_instagram
 from storage import get_alerts, insert_source_item
 
-FEEDS_PATH = Path("config/feeds.json")
+FEEDS_PATH = Path(Config.FEEDS_PATH)
 
 def load_feeds():
     if not FEEDS_PATH.exists():
