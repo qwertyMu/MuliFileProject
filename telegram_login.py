@@ -10,6 +10,7 @@ def main():
     except ImportError as exc:
         raise SystemExit("Telethon is not installed. Run pip install -r requirements.txt.") from exc
 
+
     client = TelegramClient(
         Config.TELEGRAM_SESSION,
         int(Config.TELEGRAM_API_ID),
